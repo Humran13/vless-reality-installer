@@ -99,14 +99,20 @@ load_libs() {
 }
 
 start_mock() {
-    MOCK_PORT=$((20000 + RANDOM % 20000))
+    # Ask the kernel for an unused ephemeral port. Choosing from $RANDOM races
+    # with services already running on shared CI hosts.
+    MOCK_PORT=0
     export MOCK_PORT MOCK_BASE
     mkdir -p "$T/upstream"
     rm -f "$T/mock/ready"
     python3 "$REPO/tests/unit/mock_panel.py" "$MOCK_PORT" "$MOCK_BASE" "$MOCK_TOKEN" "$T/mock/ready" "$T/upstream" &
     MOCK_PID=$!
     local i
-    for i in $(seq 1 50); do [[ -f "$T/mock/ready" ]] && break; sleep 0.1; done
+    for i in $(seq 1 50); do [[ -s "$T/mock/ready" ]] && break; sleep 0.1; done
+    [[ -s "$T/mock/ready" ]] || return 1
+    MOCK_PORT="$(cat "$T/mock/ready")"
+    [[ "$MOCK_PORT" =~ ^[0-9]+$ ]] || return 1
+    export MOCK_PORT
     export VRI_PANEL_URL="http://127.0.0.1:$MOCK_PORT/$MOCK_BASE"
     export VRI_UPSTREAM_WEB="http://127.0.0.1:$MOCK_PORT/web" VRI_UPSTREAM_RAW="http://127.0.0.1:$MOCK_PORT/raw" VRI_UPSTREAM_API="http://127.0.0.1:$MOCK_PORT/api"
 }

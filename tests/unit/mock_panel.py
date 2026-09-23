@@ -373,5 +373,5 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
-    open(sys.argv[4], "w").write("ready")
+    open(sys.argv[4], "w").write(str(srv.server_address[1]))
     srv.serve_forever()
