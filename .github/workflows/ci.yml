@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-static:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bats shellcheck jq python3 openssl curl ca-certificates iproute2 util-linux tar gzip coreutils qrencode file
+      - name: Verify unit and static suite
+        run: |
+          chmod +x install.sh bin/vless-reality tools/*.sh tests/integration/*.sh
+          bats tests/unit

@@ -1,0 +1,140 @@
+# shellcheck shell=bash
+# Shared helpers for the Bats unit tests. Everything runs inside $BATS_TEST_TMPDIR; no system paths are touched.
+
+REPO="$(cd "$BATS_TEST_DIRNAME/../.." && pwd)"
+export MOCK_TOKEN="mocktoken0123456789abcdef0123456789"
+export MOCK_BASE="basepath1234"
+
+vri_test_env() {
+    T="$BATS_TEST_TMPDIR"
+    export VRI_TEST_MODE=1 VRI_SKIP_ROOT_CHECK=1 VRI_SKIP_SYSTEMD_CHECK=1 NO_COLOR=1 VRI_FORCE_NONINTERACTIVE=1
+    export VRI_STATE_DIR="$T/state" VRI_LOG_DIR="$T/log" VRI_BACKUP_DIR="$T/backup" VRI_LOCK_FILE="$T/lock"
+    export VRI_HOME="$T/home" VRI_BIN_LINK="$T/bin/vless-reality" TMPDIR="$T/tmp"
+    export XUI_MAIN_FOLDER="$T/xui" VRI_XUI_ETC="$T/xui-etc" MOCK_DIR="$T/mock"
+    mkdir -p "$T"/{tmp,bin,shims,xui/bin,xui-etc,mock}
+    export PATH="$T/shims:$PATH"
+    install_shims
+}
+
+install_shims() {
+    cat >"$T/shims/systemctl" <<'EOS'
+#!/bin/bash
+echo "$*" >>"$MOCK_DIR/systemctl.log"
+case "$1" in
+    is-active) [[ -f "$MOCK_DIR/svc_inactive" ]] && exit 3 || exit 0 ;;
+    start) [[ -f "$MOCK_DIR/svc_start_fails" ]] && exit 1; rm -f "$MOCK_DIR/svc_inactive" ;;
+    stop) touch "$MOCK_DIR/svc_inactive" ;;
+esac
+exit 0
+EOS
+    cat >"$T/shims/ss" <<'EOS'
+#!/bin/bash
+# fake ss: lists ports from $MOCK_DIR/listening ("port:procname:pid" per line)
+port=""
+for a in "$@"; do [[ "$a" =~ ^sport\ =\ :([0-9]+)$ ]] && port="${BASH_REMATCH[1]}"; done
+{
+    [[ -f "$MOCK_DIR/listening" ]] && cat "$MOCK_DIR/listening"
+    # dynamic: every inbound known to the mock panel is "listening" (Xray) unless MOCK_XRAY_DOWN is set
+    if [[ -n "${MOCK_PORT:-}" && ! -f "$MOCK_DIR/xray_down" ]]; then
+        curl -s -m 2 "http://127.0.0.1:$MOCK_PORT/__state" 2>/dev/null | jq -r '.inbounds[]?.port | "\(.):xray:4242"' 2>/dev/null
+    fi
+} | while IFS=: read -r p name pid; do
+    [[ -n "$p" ]] || continue
+    [[ -n "$port" && "$p" != "$port" ]] && continue
+    printf 'LISTEN 0      4096         *:%s         *:*    users:(("%s",pid=%s,fd=3))\n' "$p" "${name:-proc}" "${pid:-1}"
+done
+exit 0
+EOS
+    cat >"$T/shims/x-ui" <<'EOS'
+#!/bin/bash
+# fake /usr/bin/x-ui management script: only `uninstall` is needed
+if [[ "$1" == "uninstall" ]]; then
+    read -r ans
+    [[ "$ans" == "y" ]] || exit 1
+    rm -f "$XUI_MAIN_FOLDER/x-ui"; rm -rf "$VRI_XUI_ETC"; echo "Uninstalled Successfully."; exit 0
+fi
+exit 0
+EOS
+    cat >"$T/shims/ufw" <<'EOS'
+#!/bin/bash
+# fake ufw: state in $MOCK_DIR/ufw_rules ; active flag file ufw_active ; every call is logged
+echo "$*" >>"$MOCK_DIR/ufw.log"
+case "$1" in
+    status)
+        if [[ -f "$MOCK_DIR/ufw_active" ]]; then echo "Status: active"; echo; echo "To Action From"; echo "-- ------ ----"
+            [[ -f "$MOCK_DIR/ufw_rules" ]] && while read -r r; do echo "$r                  ALLOW       Anywhere"; done <"$MOCK_DIR/ufw_rules"
+        else echo "Status: inactive"; fi ;;
+    allow) echo "$2" >>"$MOCK_DIR/ufw_rules" ;;
+    --force) if [[ "$2" == "delete" ]]; then grep -vxF "$4" "$MOCK_DIR/ufw_rules" >"$MOCK_DIR/ufw_rules.new" || true; mv "$MOCK_DIR/ufw_rules.new" "$MOCK_DIR/ufw_rules"; fi ;;
+esac
+exit 0
+EOS
+    cat >"$T/xui/x-ui" <<'EOS'
+#!/bin/bash
+case "$1 ${2:-}" in
+    "-v "*) echo "3.8.5" ;;
+    "setting -show") echo "current panel settings as follows:"; echo "hasDefaultCredential: false"; echo "port: ${MOCK_PORT:-9999}"; echo "webBasePath: /${MOCK_BASE:-x}/" ;;
+    "setting -getCert") echo "cert: "; echo "key: " ;;
+    "setting -getApiToken") echo called >>"$MOCK_DIR/getApiToken.called"; echo "apiToken: SHOULD-NEVER-BE-CALLED" ;;
+esac
+exit 0
+EOS
+    chmod +x "$T"/shims/* "$T/xui/x-ui"
+}
+
+# Source the libraries exactly like bin/vless-reality does.
+load_libs() {
+    export VRI_ROOT_DIR="$REPO" VRI_LIB_DIR="$REPO/lib"
+    local m
+    for m in common validate os network upstream api state reality modes firewall client output installer repair diagnostics backup update uninstall; do
+        # shellcheck source=/dev/null
+        . "$REPO/lib/$m.sh"
+    done
+    vri_tmp_init
+}
+
+start_mock() {
+    MOCK_PORT=$((20000 + RANDOM % 20000))
+    export MOCK_PORT MOCK_BASE
+    mkdir -p "$T/upstream"
+    rm -f "$T/mock/ready"
+    python3 "$REPO/tests/unit/mock_panel.py" "$MOCK_PORT" "$MOCK_BASE" "$MOCK_TOKEN" "$T/mock/ready" "$T/upstream" &
+    MOCK_PID=$!
+    local i
+    for i in $(seq 1 50); do [[ -f "$T/mock/ready" ]] && break; sleep 0.1; done
+    export VRI_PANEL_URL="http://127.0.0.1:$MOCK_PORT/$MOCK_BASE"
+    export VRI_UPSTREAM_WEB="http://127.0.0.1:$MOCK_PORT/web" VRI_UPSTREAM_RAW="http://127.0.0.1:$MOCK_PORT/raw" VRI_UPSTREAM_API="http://127.0.0.1:$MOCK_PORT/api"
+}
+
+stop_mock() { [[ -n "${MOCK_PID:-}" ]] && kill "$MOCK_PID" 2>/dev/null || true; }
+
+mock_ctl() { curl -s -X POST -d "$1" "http://127.0.0.1:$MOCK_PORT/__ctl" >/dev/null; }
+mock_state() { curl -s "http://127.0.0.1:$MOCK_PORT/__state"; }
+
+# A fake upstream release: install.sh creates the fake x-ui + install-result.env (as the real one does).
+make_fake_upstream() { # tag
+    mkdir -p "$T/upstream/$1"
+    cat >"$T/upstream/$1/install.sh" <<'EOS'
+#!/bin/bash
+# fake MHSanaei/3x-ui installer (sha256 verification is mentioned so our sanity guard passes)
+[[ "${XUI_NONINTERACTIVE:-}" == "1" ]] || { echo "not non-interactive" >&2; exit 9; }
+[[ "${XUI_ENABLE_FAIL2BAN:-}" == "false" ]] || exit 9
+[[ -z "${XUI_USERNAME:-}${XUI_PASSWORD:-}${XUI_PANEL_PORT:-}${XUI_WEB_BASE_PATH:-}" ]] || { echo "must not pin credentials" >&2; exit 9; }
+echo "Username: admin-secret-user"; echo "Password: hunter2-secret-pass"; echo "API Token: leaked-token-value"
+[[ -n "${FAKE_INSTALL_FAIL:-}" ]] && exit 1
+cp "$MOCK_DIR/../xui/x-ui.template" "$XUI_MAIN_FOLDER/x-ui" 2>/dev/null || true
+touch "$XUI_MAIN_FOLDER/.installed"
+[[ -n "${FAKE_NO_RESULT:-}" ]] && exit 0
+umask 077
+printf 'XUI_USERNAME=u\nXUI_PASSWORD=p\nXUI_PANEL_PORT=%s\nXUI_WEB_BASE_PATH=%s\nXUI_ACCESS_URL=http://x\nXUI_API_TOKEN=%s\nXUI_DB_TYPE=sqlite\n' "$MOCK_PORT" "$MOCK_BASE" "$MOCK_TOKEN" >"$VRI_XUI_ETC/install-result.env"
+# sha256 sidecar verification would happen here in the real script
+exit 0
+EOS
+}
+
+# Sequence used by lifecycle tests: fake x-ui "not installed" until the fake installer ran.
+prepare_uninstalled_panel() {
+    cp "$T/xui/x-ui" "$T/xui/x-ui.template"
+    rm -f "$T/xui/x-ui"
+    make_fake_upstream v3.8.5
+}
