@@ -6,7 +6,12 @@ export MOCK_TOKEN="mocktoken0123456789abcdef0123456789"
 export MOCK_BASE="basepath1234"
 
 vri_test_env() {
-    T="$BATS_TEST_TMPDIR"
+    # BATS_TEST_TMPDIR is available in current Bats. Ubuntu 22.04 packages an
+    # older release, so create an equally private per-test directory there.
+    T="${BATS_TEST_TMPDIR:-}"
+    if [[ -z "$T" ]]; then
+        T="$(mktemp -d "${BATS_TMPDIR:-/tmp}/vri-bats.XXXXXX")"
+    fi
     export VRI_TEST_MODE=1 VRI_SKIP_ROOT_CHECK=1 VRI_SKIP_SYSTEMD_CHECK=1 NO_COLOR=1 VRI_FORCE_NONINTERACTIVE=1
     export VRI_STATE_DIR="$T/state" VRI_LOG_DIR="$T/log" VRI_BACKUP_DIR="$T/backup" VRI_LOCK_FILE="$T/lock"
     export VRI_HOME="$T/home" VRI_BIN_LINK="$T/bin/vless-reality" TMPDIR="$T/tmp"

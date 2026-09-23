@@ -12,6 +12,9 @@ setup() {
 
 @test "UFW not installed: nothing is run, message explains cloud firewalls" {
     rm -f "$T/shims/ufw"
+    # Some CI images preinstall /usr/sbin/ufw. Keep the fixture independent of
+    # the host while retaining the ordinary commands needed by the test.
+    PATH="$T/shims:/usr/bin:/bin"
     run fw_open_port 443
     [ "$status" -eq 0 ]
     [[ "$output" == *"UFW is not installed"* ]]

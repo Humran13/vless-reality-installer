@@ -137,7 +137,7 @@ ln -sfn "$HOME_DIR/bin/vless-reality" "$BIN_LINK"
 info "Starting the installer..."
 if [[ -t 0 ]]; then
     exec "$HOME_DIR/bin/vless-reality" install ${args[@]+"${args[@]}"}
-elif { true </dev/tty; } 2>/dev/null; then
+elif [[ -c /dev/tty && ( -t 1 || -t 2 ) ]]; then
     exec "$HOME_DIR/bin/vless-reality" install ${args[@]+"${args[@]}"} </dev/tty
 else
     exec "$HOME_DIR/bin/vless-reality" install ${args[@]+"${args[@]}"} </dev/null

@@ -120,7 +120,7 @@ vri_detect_interactive() {
     if [[ -t 0 ]]; then
         VRI_INTERACTIVE=1
         VRI_IN_FD=0
-    elif { true </dev/tty; } 2>/dev/null; then
+    elif [[ -c /dev/tty && ( -t 1 || -t 2 ) ]]; then
         exec 3</dev/tty
         VRI_INTERACTIVE=1
         VRI_IN_FD=3
