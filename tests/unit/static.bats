@@ -99,7 +99,7 @@ setup() {
         }' "$@"
     }
 
-    run bash -c 'source /dev/stdin' <<<"$(declare -f executable_shell_text)"$'\n''executable_shell_text install.sh bin/vless-reality lib/*.sh | grep -E '\''(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh'\''' 
+    run bash -c 'source /dev/stdin' <<<"$(declare -f executable_shell_text)"$'\n''executable_shell_text install.sh bin/vless-reality lib/*.sh | grep -E '\''(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?(ba)?sh'\'''
     [ "$status" -ne 0 ] || { echo "$output"; return 1; }
 
     # Prove the scanner itself rejects executable pipelines rather than merely
