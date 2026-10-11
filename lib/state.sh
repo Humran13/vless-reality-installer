@@ -22,6 +22,33 @@ state_exists() {
     [[ -s "$f" ]] && jq -e 'type == "object"' "$f" >/dev/null 2>&1
 }
 
+# A state file is proof of this project only when it has the complete schema
+# needed to reconstruct the managed VLESS REALITY inbound safely.
+state_is_complete() {
+    local f
+    f="$(state_file)"
+    state_exists && jq -e '
+        .schema == 1
+        and (.wrapper_version | type == "string" and length > 0)
+        and (.mode == "tcp" or .mode == "grpc" or .mode == "xhttp")
+        and (.server_address | type == "string" and length > 0)
+        and (.panel | type == "object")
+        and (.inbound | type == "object")
+        and (.inbound.id | type == "number")
+        and (.inbound.port | type == "number")
+        and (.inbound.tag | type == "string" and length > 0)
+        and (.inbound.remark | type == "string" and startswith("BlueSoftKeys-Reality-"))
+        and (.reality | type == "object")
+        and (.reality.target | type == "string" and length > 0)
+        and (.reality.sni | type == "string" and length > 0)
+        and (.reality.private_key | type == "string" and length > 0)
+        and (.reality.public_key | type == "string" and length > 0)
+        and (.reality.short_id | type == "string" and length > 0)
+        and (.mode_opts | type == "object")
+        and (.clients | type == "array")
+    ' "$f" >/dev/null 2>&1
+}
+
 state_require() {
     state_exists || die "no BlueSoftKeys-managed VLESS REALITY setup found (state: $(state_file)). Run: sudo vless-reality install" "$VRI_EX_STATE"
     state_load

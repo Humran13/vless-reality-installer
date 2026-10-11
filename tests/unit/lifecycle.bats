@@ -54,6 +54,16 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     [[ "$output" != *"Scan this with your client app"* ]]
 }
 
+@test "other BlueSoftKeys state does not trigger VLESS existing-install detection" {
+    mkdir -p "$T/etc/bluesoftkeys-hysteria2"
+    printf '{"installed":true}\n' >"$T/etc/bluesoftkeys-hysteria2/state.json"
+    inst --mode tcp
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" != *"already exists on this server"* ]]
+    [ "$(inbounds)" = "1" ]
+    [ -s "$T/etc/bluesoftkeys-hysteria2/state.json" ]
+}
+
 @test "clean install works for grpc and xhttp with the correct flow behaviour" {
     inst --mode grpc
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
@@ -87,6 +97,42 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     [ "$(state -c .reality)" = "$keys" ]
     [ "$(curl -s http://127.0.0.1:$MOCK_PORT/__state | jq '.next_token')" = "$toks" ]
     [[ "$output" == *"already exists"* ]]
+}
+
+@test "complete project state without x-ui service takes recovery path and preserves state and unrelated resources" {
+    inst --mode tcp; [ "$status" -eq 0 ]
+    uuid="$(state '.clients[0].uuid')"; pub="$(state .reality.public_key)"
+    jq -n '{enable:true,remark:"FOREIGN",listen:"",port:9000,protocol:"vless",settings:{clients:[]},streamSettings:{network:"tcp",security:"none"}}' >"$T/foreign.json"
+    curl -s -H "Authorization: Bearer $MOCK_TOKEN" -H 'Content-Type: application/json' --data-binary "@$T/foreign.json" "$VRI_PANEL_URL/panel/api/inbounds/add" >/dev/null
+    rm -f "$MOCK_DIR/xui_unit"
+    inst --mode tcp
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"continuing through the installation path to repair it"* ]]
+    [[ "$output" != *"already exists on this server"* ]]
+    [ "$(state '.clients[0].uuid')" = "$uuid" ]
+    [ "$(state .reality.public_key)" = "$pub" ]
+    [ "$(inbounds)" = "2" ]
+    mock_state | jq -e '.inbounds[] | select(.remark=="FOREIGN")' >/dev/null
+    [ -f "$MOCK_DIR/xui_unit" ]
+    [ -x "$XUI_MAIN_FOLDER/x-ui" ]
+    # A second partial state with both runtime pieces absent is also repaired
+    # from the same saved project state without duplicating either inbound.
+    rm -f "$MOCK_DIR/xui_unit" "$XUI_MAIN_FOLDER/x-ui"
+    inst --mode tcp
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(state '.clients[0].uuid')" = "$uuid" ]
+    [ "$(state .reality.public_key)" = "$pub" ]
+    [ "$(inbounds)" = "2" ]
+}
+
+@test "unrecognised stale state is not classified as a healthy existing installation" {
+    mkdir -p "$VRI_STATE_DIR"
+    printf '{"left_by":"old-uninstall"}\n' >"$VRI_STATE_DIR/state.json"
+    inst --mode tcp
+    [ "$status" -eq 6 ]
+    [[ "$output" == *"not a complete"* ]]
+    [[ "$output" != *"already exists on this server"* ]]
+    [ ! -e "$XUI_MAIN_FOLDER/x-ui" ]
 }
 
 @test "second run with a different mode is refused with instructions" {
@@ -125,6 +171,7 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
 
 @test "existing 3X-UI without a usable token: stops with instructions, changes nothing, never resets credentials" {
     cp "$T/xui/x-ui.template" "$XUI_MAIN_FOLDER/x-ui"
+    touch "$MOCK_DIR/xui_unit"
     rm -f "$VRI_XUI_ETC/install-result.env"
     inst --mode tcp
     [ "$status" -eq 5 ]
@@ -136,6 +183,7 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
 
 @test "existing 3X-UI + user-supplied token: works, keeps foreign inbounds, records installed_by_us=false" {
     cp "$T/xui/x-ui.template" "$XUI_MAIN_FOLDER/x-ui"
+    touch "$MOCK_DIR/xui_unit"
     jq -n '{enable:true,remark:"MY-OWN",listen:"",port:9000,protocol:"vless",settings:{clients:[]},streamSettings:{network:"tcp",security:"none"}}' >"$T/own.json"
     curl -s -H "Authorization: Bearer $MOCK_TOKEN" -H 'Content-Type: application/json' --data-binary "@$T/own.json" "$VRI_PANEL_URL/panel/api/inbounds/add" >/dev/null
     VRI_XUI_API_TOKEN="$MOCK_TOKEN" inst --mode tcp

@@ -17,6 +17,7 @@ vri_test_env() {
     export VRI_HOME="$T/home" VRI_BIN_LINK="$T/bin/vless-reality" TMPDIR="$T/tmp"
     export XUI_MAIN_FOLDER="$T/xui" VRI_XUI_ETC="$T/xui-etc" MOCK_DIR="$T/mock"
     mkdir -p "$T"/{tmp,bin,shims,xui/bin,xui-etc,mock}
+    touch "$MOCK_DIR/xui_unit"
     export PATH="$T/shims:$PATH"
     install_shims
 }
@@ -26,8 +27,9 @@ install_shims() {
 #!/bin/bash
 echo "$*" >>"$MOCK_DIR/systemctl.log"
 case "$1" in
-    is-active) [[ -f "$MOCK_DIR/svc_inactive" ]] && exit 3 || exit 0 ;;
-    start) [[ -f "$MOCK_DIR/svc_start_fails" ]] && exit 1; rm -f "$MOCK_DIR/svc_inactive" ;;
+    cat) [[ -f "$MOCK_DIR/xui_unit" ]] || exit 1 ;;
+    is-active) [[ -f "$MOCK_DIR/xui_unit" && ! -f "$MOCK_DIR/svc_inactive" ]] || exit 3 ;;
+    start) [[ -f "$MOCK_DIR/xui_unit" && ! -f "$MOCK_DIR/svc_start_fails" ]] || exit 1; rm -f "$MOCK_DIR/svc_inactive" ;;
     stop) touch "$MOCK_DIR/svc_inactive" ;;
 esac
 exit 0
@@ -152,6 +154,7 @@ echo "Username: admin-secret-user"; echo "Password: hunter2-secret-pass"; echo "
 [[ -n "${FAKE_INSTALL_FAIL:-}" ]] && exit 1
 cp "$MOCK_DIR/../xui/x-ui.template" "$XUI_MAIN_FOLDER/x-ui" 2>/dev/null || true
 touch "$XUI_MAIN_FOLDER/.installed"
+touch "$MOCK_DIR/xui_unit"
 [[ -n "${FAKE_NO_RESULT:-}" ]] && exit 0
 umask 077
 printf 'XUI_USERNAME=u\nXUI_PASSWORD=p\nXUI_PANEL_PORT=%s\nXUI_WEB_BASE_PATH=%s\nXUI_ACCESS_URL=http://x\nXUI_API_TOKEN=%s\nXUI_DB_TYPE=sqlite\n' "$MOCK_PORT" "$MOCK_BASE" "$MOCK_TOKEN" >"$VRI_XUI_ETC/install-result.env"
@@ -164,5 +167,6 @@ EOS
 prepare_uninstalled_panel() {
     cp "$T/xui/x-ui" "$T/xui/x-ui.template"
     rm -f "$T/xui/x-ui"
+    rm -f "$MOCK_DIR/xui_unit"
     make_fake_upstream v3.8.5
 }

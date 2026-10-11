@@ -64,7 +64,7 @@ install_choose_address() {
 install_ensure_panel() {
     local tag
     state_dir_init
-    if upstream_installed; then
+    if upstream_installation_complete; then
         log_info "Existing 3X-UI detected ($(upstream_version || echo unknown)). It will not be reinstalled, reset or modified."
         [[ -e "$(installer_panel_marker)" ]] && PANEL_BY_US="true"
         if ! upstream_service_active; then
@@ -78,6 +78,9 @@ install_ensure_panel() {
     sudo VRI_XUI_API_TOKEN='<token>' vless-reality install ..." "$VRI_EX_API"
         fi
     else
+        if upstream_installed || upstream_service_exists; then
+            log_warn "The 3X-UI installation is incomplete (binary or systemd unit missing); running the official installer to repair it."
+        fi
         if [[ -n "${OPT_PANEL_VERSION:-}" ]]; then
             valid_stable_tag "$OPT_PANEL_VERSION" || die "--panel-version must be a stable tag like v3.8.5 (dev builds are never installed)" "$VRI_EX_USAGE"
             tag="$OPT_PANEL_VERSION"
@@ -199,6 +202,7 @@ install_validate_options() {
 }
 
 installer_run() {
+    local recover_existing=0
     output_banner
     vri_require_root
     vri_tmp_init
@@ -210,42 +214,64 @@ installer_run() {
     os_check_all
     os_install_deps
 
-    if state_exists; then
-        log_info "A BlueSoftKeys setup already exists on this server; verifying it instead of installing again."
+    if state_exists && ! state_is_complete; then
+        die "$(state_file) exists but is not a complete ${VRI_PRODUCT} state file. It will not be treated as an installed setup or overwritten; move it aside after inspecting it, then re-run." "$VRI_EX_STATE"
+    fi
+
+    if state_is_complete; then
         state_load
-        if [[ -n "${OPT_MODE:-}" && "$OPT_MODE" != "$MODE" ]]; then
-            die "this server is already configured for mode '$MODE'. To switch modes run 'sudo vless-reality uninstall' (option 1) first, then install again." "$VRI_EX_STATE"
+        if ! upstream_installation_complete; then
+            recover_existing=1
+            log_warn "A VLESS Reality project state exists, but 3X-UI or x-ui.service is missing; continuing through the installation path to repair it."
+        else
+            log_info "A BlueSoftKeys setup already exists on this server; verifying it instead of installing again."
+            if [[ -n "${OPT_MODE:-}" && "$OPT_MODE" != "$MODE" ]]; then
+                die "this server is already configured for mode '$MODE'. To switch modes run 'sudo vless-reality uninstall' (option 1) first, then install again." "$VRI_EX_STATE"
+            fi
+            repair_session_init
+            install_management_command
+            repair_run quiet
+            if [[ "$(state_get '(.clients // []) | length')" == "0" ]]; then
+                log_info "No client recorded (an earlier run was interrupted?); creating the first client"
+                client_create "${OPT_CLIENT_NAME:-$DEFAULT_CLIENT_NAME}"
+            fi
+            output_info
+            return 0
         fi
-        repair_session_init
-        install_management_command
-        repair_run quiet
-        if [[ "$(state_get '(.clients // []) | length')" == "0" ]]; then
-            log_info "No client recorded (an earlier run was interrupted?); creating the first client"
-            client_create "${OPT_CLIENT_NAME:-$DEFAULT_CLIENT_NAME}"
-        fi
-        output_info
-        return 0
     fi
 
     # ----- decide inputs (before touching the system) -----
-    if [[ -z "${OPT_MODE:-}" ]]; then
+    if ((recover_existing)); then
+        if [[ -n "${OPT_MODE:-}" && "$OPT_MODE" != "$MODE" ]]; then
+            die "the recoverable project state is configured for mode '$MODE', not '$OPT_MODE'. Re-run without changing the mode." "$VRI_EX_STATE"
+        fi
+        log_info "Recovering mode: $(mode_call "$MODE" label)"
+        mode_call "$MODE" validate || die "saved project state has invalid mode options; refusing unsafe automatic recovery" "$VRI_EX_STATE"
+    elif [[ -z "${OPT_MODE:-}" ]]; then
         if ((VRI_INTERACTIVE)); then modes_choose; else OPT_MODE="tcp"; fi
     fi
-    valid_mode "$OPT_MODE" || die "invalid --mode '$OPT_MODE' (valid: ${VRI_MODES[*]})" "$VRI_EX_USAGE"
-    MODE="$OPT_MODE"
-    log_info "Mode: $(mode_call "$MODE" label)"
-    mode_call "$MODE" defaults
-    ((VRI_INTERACTIVE)) && mode_call "$MODE" prompt
-    mode_call "$MODE" validate || die "invalid mode options" "$VRI_EX_USAGE"
-    install_validate_options
+    if ((!recover_existing)); then
+        valid_mode "$OPT_MODE" || die "invalid --mode '$OPT_MODE' (valid: ${VRI_MODES[*]})" "$VRI_EX_USAGE"
+        MODE="$OPT_MODE"
+        log_info "Mode: $(mode_call "$MODE" label)"
+        mode_call "$MODE" defaults
+        ((VRI_INTERACTIVE)) && mode_call "$MODE" prompt
+        mode_call "$MODE" validate || die "invalid mode options" "$VRI_EX_USAGE"
+        install_validate_options
+    fi
 
     # ----- panel first: we may find an interrupted install to adopt -----
     log_step "3X-UI panel"
     local existing
     # port/address are only needed for a new inbound; but the panel must exist to know whether one already does
     install_ensure_panel
-    existing="$(install_find_our_inbound)"
-    if [[ -n "$existing" ]]; then
+    if ((recover_existing)); then
+        log_step "Repairing the incomplete VLESS Reality installation"
+        repair_run quiet
+    else
+        existing="$(install_find_our_inbound)"
+    fi
+    if ((!recover_existing)) && [[ -n "$existing" ]]; then
         log_step "Found an existing BlueSoftKeys inbound"
         local existing_net want_net
         existing_net="$(jq -r '(.streamSettings | if type == "string" then fromjson else . end).network' <<<"$existing")"
@@ -254,7 +280,7 @@ installer_run() {
             die "a BlueSoftKeys inbound with network '$existing_net' exists but you asked for '$MODE'. Use 'sudo vless-reality uninstall' (option 1) first." "$VRI_EX_STATE"
         fi
         adopt_inbound "$existing"
-    else
+    elif ((!recover_existing)); then
         log_step "Preparing the VLESS REALITY inbound"
         install_choose_address
         install_choose_port

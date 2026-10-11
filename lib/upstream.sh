@@ -32,6 +32,14 @@ upstream_installed() {
     [[ -x "$UPSTREAM_DIR/x-ui" ]]
 }
 
+upstream_service_exists() {
+    systemctl cat "${UPSTREAM_SERVICE}.service" >/dev/null 2>&1
+}
+
+upstream_installation_complete() {
+    upstream_installed && upstream_service_exists
+}
+
 upstream_service_active() {
     systemctl is-active --quiet "$UPSTREAM_SERVICE" 2>/dev/null
 }
