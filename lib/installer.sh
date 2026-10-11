@@ -286,10 +286,6 @@ installer_run() {
     printf '\n%s\n' "${C_GRN}Installation complete.${C_OFF}" >&2
     output_connection_details
     output_client_block "$first"
-    if vri_have qrencode; then
-        printf '\nScan this with your client app:\n'
-        client_qr "$first" || true
-    fi
     output_panel_hint
     printf '\nManage everything with: sudo vless-reality menu   (or: vless-reality help)\n'
     fw_reminder

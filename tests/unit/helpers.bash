@@ -74,6 +74,11 @@ case "$1" in
 esac
 exit 0
 EOS
+    cat >"$T/shims/qrencode" <<'EOS'
+#!/bin/bash
+echo "$*" >>"$MOCK_DIR/qrencode.log"
+printf 'MOCK-QR-OUTPUT\n'
+EOS
     cat >"$T/xui/x-ui" <<'EOS'
 #!/bin/bash
 case "$1 ${2:-}" in

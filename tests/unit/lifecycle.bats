@@ -49,6 +49,9 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     # management command installed
     [ -L "$VRI_BIN_LINK" ]
     [ -x "$VRI_HOME/bin/vless-reality" ]
+    [ ! -e "$MOCK_DIR/qrencode.log" ]
+    [[ "$output" != *"MOCK-QR-OUTPUT"* ]]
+    [[ "$output" != *"Scan this with your client app"* ]]
 }
 
 @test "clean install works for grpc and xhttp with the correct flow behaviour" {
@@ -236,6 +239,9 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     [ "$(mock_state | jq -r '.clients.Alice.enable')" = "false" ]
     [ "$(mock_state | jq -r '.clients.Alice.flow')" = "xtls-rprx-vision" ]
     vr enable-client Alice; [ "$status" -eq 0 ]
+    vr qr Alice; [ "$status" -eq 0 ]
+    [[ "$output" == *"MOCK-QR-OUTPUT"* ]]
+    grep -q -- '-t ANSIUTF8' "$MOCK_DIR/qrencode.log"
     vr --yes remove-client Alice; [ "$status" -eq 0 ]
     [ "$(clients)" = "1" ]
     vr add-client 'bad;name'; [ "$status" -eq 2 ]
