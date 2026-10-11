@@ -24,6 +24,10 @@ The bootstrap downloads the repository archive, verifies `bin/`, `lib/`, and `VE
 the wrapper under `/opt/vless-reality-installer`, then invokes the management CLI. The wrapper pins or discovers only
 stable `vX.Y.Z` 3X-UI releases; it never selects `dev-latest`.
 
+Package installation and the official 3X-UI installer run unattended with streaming output. Ubuntu `needrestart`
+prompts, including **Pending kernel upgrade**, are answered automatically; the installer never reboots the VPS. If a
+newer kernel was installed, the final output recommends a manual reboot. No full OS upgrade is required or performed.
+
 ## Supported modes
 
 | Mode | Transport | Flow | Validation |

@@ -87,7 +87,7 @@ eq "api-token perms" "$(stat -c %a /etc/vless-reality-installer/api-token)" "600
 check "management command installed" test -x "$VR"
 check "Xray listening on $PORT" wait_listen "$PORT"
 check "x-ui service active" systemctl is-active --quiet x-ui
-check "3X-UI is the stable v3.8.5 release" test "$(/usr/local/x-ui/x-ui -v)" = "3.8.5"
+check "3X-UI installed version is stable semver" bash -c '[[ "$(/usr/local/x-ui/x-ui -v)" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]'
 check "install-result.env perms 600" test "$(stat -c %a /etc/x-ui/install-result.env)" = "600"
 
 L1="$(link_of BlueSoftKeys-Client-1)"

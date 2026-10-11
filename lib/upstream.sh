@@ -102,17 +102,21 @@ upstream_fetch_script() {
     printf '%s' "$dest"
 }
 
-# Run an upstream script with all output captured (it prints credentials!). Show only a filtered tail on failure.
+# Run an upstream script unattended. Output is filtered and streamed live; a
+# private copy of that filtered stream is retained only long enough to report a
+# useful tail on failure.
 _upstream_run_script() {
     local script="$1"
     shift
     local out rc=0
+    local -a pipe_status
     out="$(vri_mktemp upstream-out)"
-    if [[ "$VRI_VERBOSE" == "1" ]]; then
-        "$@" bash "$script" "${UPSTREAM_SCRIPT_ARGS[@]}" </dev/null 2>&1 | _upstream_filter | tee "$out" >&2 || rc=${PIPESTATUS[0]}
+    if vri_unattended_run "$@" bash "$script" "${UPSTREAM_SCRIPT_ARGS[@]}" 2>&1 | _upstream_filter | tee "$out" >&2; then
+        pipe_status=("${PIPESTATUS[@]}")
     else
-        "$@" bash "$script" "${UPSTREAM_SCRIPT_ARGS[@]}" </dev/null >"$out" 2>&1 || rc=$?
+        pipe_status=("${PIPESTATUS[@]}")
     fi
+    rc="${pipe_status[0]}"
     if ((rc != 0)); then
         log_err "upstream script failed (exit $rc). Last output (credentials filtered):"
         _upstream_filter <"$out" | tail -n 25 | while IFS= read -r l; do log_err "  $l"; done
@@ -242,7 +246,7 @@ upstream_panel_settings() {
 upstream_uninstall() {
     upstream_installed || return 0
     log_info "Running the official 3X-UI uninstaller..."
-    local out script
+    local out script answer
     script="$(command -v x-ui 2>/dev/null || true)"
     [[ -n "$script" ]] || script="$UPSTREAM_DIR/x-ui.sh"
     [[ -f "$script" ]] || {
@@ -250,9 +254,11 @@ upstream_uninstall() {
         return 1
     }
     out="$(vri_mktemp xui-uninstall)"
+    answer="$(vri_mktemp xui-uninstall-answer)"
+    printf 'y\n' >"$answer"
     # XUI_MAIN_FOLDER: x-ui.sh assumes the Docker image layout (/app) when /.dockerenv exists; be explicit.
     # The upstream script deletes itself at the end and may exit non-zero even on success: judge by the result instead.
-    printf 'y\n' | env XUI_MAIN_FOLDER="$UPSTREAM_DIR" bash "$script" uninstall >"$out" 2>&1 || true
+    VRI_COMMAND_STDIN="$answer" vri_unattended_run env XUI_MAIN_FOLDER="$UPSTREAM_DIR" bash "$script" uninstall >"$out" 2>&1 || true
     if [[ -x "$UPSTREAM_DIR/x-ui" ]] || grep -q 'Please install the panel first' "$out"; then
         log_err "official uninstall failed"
         _upstream_filter <"$out" | tail -n 15 | while IFS= read -r l; do log_err "  $l"; done

@@ -293,6 +293,7 @@ installer_run() {
     output_panel_hint
     printf '\nManage everything with: sudo vless-reality menu   (or: vless-reality help)\n'
     fw_reminder
+    os_warn_reboot_if_kernel_changed
 }
 
 fw_reminder() {

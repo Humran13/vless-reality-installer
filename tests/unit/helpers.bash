@@ -130,7 +130,19 @@ make_fake_upstream() { # tag
 # fake MHSanaei/3x-ui installer (sha256 verification is mentioned so our sanity guard passes)
 [[ "${XUI_NONINTERACTIVE:-}" == "1" ]] || { echo "not non-interactive" >&2; exit 9; }
 [[ "${XUI_ENABLE_FAIL2BAN:-}" == "false" ]] || exit 9
+[[ "${DEBIAN_FRONTEND:-}" == "noninteractive" ]] || exit 9
+[[ "${DEBCONF_NONINTERACTIVE_SEEN:-}" == "true" ]] || exit 9
+[[ "${DEBIAN_PRIORITY:-}" == "critical" ]] || exit 9
+[[ "${NEEDRESTART_MODE:-}" == "a" ]] || exit 9
+[[ "${APT_LISTCHANGES_FRONTEND:-}" == "none" ]] || exit 9
+[[ "${UCF_FORCE_CONFFOLD:-}" == "1" ]] || exit 9
+[[ -r "${APT_CONFIG:-}" ]] || exit 9
+grep -q -- '--force-confdef' "$APT_CONFIG" || exit 9
+grep -q -- '--force-confold' "$APT_CONFIG" || exit 9
+if IFS= read -r unexpected; then echo "stdin was not closed" >&2; exit 9; fi
 [[ -z "${XUI_USERNAME:-}${XUI_PASSWORD:-}${XUI_PANEL_PORT:-}${XUI_WEB_BASE_PATH:-}" ]] || { echo "must not pin credentials" >&2; exit 9; }
+echo "Downloading 3X-UI release"
+[[ -n "${FAKE_INSTALL_PAUSE:-}" ]] && sleep "$FAKE_INSTALL_PAUSE"
 echo "Username: admin-secret-user"; echo "Password: hunter2-secret-pass"; echo "API Token: leaked-token-value"
 [[ -n "${FAKE_INSTALL_FAIL:-}" ]] && exit 1
 cp "$MOCK_DIR/../xui/x-ui.template" "$XUI_MAIN_FOLDER/x-ui" 2>/dev/null || true

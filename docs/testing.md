@@ -2,7 +2,7 @@
 
 ## Automated suites
 
-`tests/run-unit.sh` runs the Bats suite in the disposable `bsk-dev` Docker image. The current suite has 134 cases
+`tests/run-unit.sh` runs the Bats suite in the disposable `bsk-dev` Docker image. The current suite has 143 cases
 covering API authentication/errors/contracts, inbound and client lifecycle, mode JSON and link parsing, idempotency,
 repair, backup/restore, update failures, uninstall scoping, OS detection, shell syntax, ShellCheck, manifest integrity,
 unsafe shell patterns, permissions and secret/path scanning.

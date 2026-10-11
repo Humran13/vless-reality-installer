@@ -155,9 +155,27 @@ os_install_deps() {
         return 0
     fi
     log_info "Installing dependencies from the OS repositories: ${missing[*]}"
-    export DEBIAN_FRONTEND=noninteractive
-    vri_run_logged apt-get update -q || log_warn "apt-get update reported problems; trying to continue"
-    vri_run_logged apt-get install -y -q --no-install-recommends "${missing[@]}" || die "failed to install dependencies: ${missing[*]}" "$VRI_EX_ENV"
+    vri_run_unattended_logged apt-get update -q || log_warn "apt-get update reported problems; trying to continue"
+    vri_run_unattended_logged apt-get install -y -q --no-install-recommends "${missing[@]}" || die "failed to install dependencies: ${missing[*]}" "$VRI_EX_ENV"
+}
+
+# Package operations always stream so progress remains visible on slow VPSes.
+vri_run_unattended_logged() {
+    local out rc=0
+    local -a pipe_status
+    out="$(vri_mktemp run)"
+    if vri_unattended_run "$@" 2>&1 | tee "$out" >&2; then
+        pipe_status=("${PIPESTATUS[@]}")
+    else
+        pipe_status=("${PIPESTATUS[@]}")
+    fi
+    rc="${pipe_status[0]}"
+    if ((rc != 0)); then
+        log_err "command failed (exit $rc): $*"
+        tail -n 15 "$out" | while IFS= read -r l; do log_err "  $(vri_redact "$l")"; done
+    fi
+    rm -f "$out"
+    return "$rc"
 }
 
 # Run a command; on failure show the tail of its output. Output is kept out of the terminal unless --verbose.
@@ -175,4 +193,16 @@ vri_run_logged() {
     fi
     rm -f "$out"
     return "$rc"
+}
+
+# Warn after installation when a newer kernel is present, but never reboot.
+os_warn_reboot_if_kernel_changed() {
+    local running newest modules_dir="${VRI_MODULES_DIR:-/lib/modules}"
+    running="${VRI_RUNNING_KERNEL:-$(uname -r)}"
+    newest="$(find "$modules_dir" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -n1 || true)"
+    if [[ -n "$newest" && "$newest" != "$running" ]] && dpkg --compare-versions "$newest" gt "$running" 2>/dev/null; then
+        log_warn "A newer kernel is installed ($newest; running: $running). Installation completed without rebooting; reboot the VPS manually when convenient."
+    elif [[ -e "${VRI_REBOOT_REQUIRED_FILE:-/var/run/reboot-required}" ]]; then
+        log_warn "Ubuntu reports that a reboot is required. Installation completed without rebooting; reboot the VPS manually when convenient."
+    fi
 }

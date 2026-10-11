@@ -184,6 +184,95 @@ vri_curl() {
     curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time "${VRI_CURL_MAX_TIME:-180}" "$@"
 }
 
+# Create a private, process-scoped apt configuration for unattended package
+# work.  APT_CONFIG is supplied only to child processes by
+# vri_unattended_run; the host's apt/debconf configuration is never changed.
+vri_unattended_apt_config() {
+    vri_tmp_init
+    local conf="$VRI_TMP/apt-unattended.conf"
+    if [[ ! -f "$conf" ]]; then
+        (umask 077 && printf '%s\n' \
+            'APT::Get::Assume-Yes "true";' \
+            'Dpkg::Options {' \
+            '  "--force-confdef";' \
+            '  "--force-confold";' \
+            '};' >"$conf") || return 1
+        chmod 600 "$conf" || return 1
+    fi
+    printf '%s' "$conf"
+}
+
+# Stream a command's output while aborting only after a period with no output.
+# This is deliberately an inactivity watchdog, not a total-duration timeout.
+vri_watchdog_run() {
+    local timeout="${VRI_INACTIVITY_TIMEOUT:-300}" interval fifo heartbeat timed_out input
+    local cmd_pid watch_pid rc=0 now last
+    [[ "$timeout" =~ ^[1-9][0-9]*$ ]] || timeout=300
+    interval=$((timeout / 5))
+    ((interval < 1)) && interval=1
+    ((interval > 10)) && interval=10
+    vri_tmp_init
+    fifo="$(vri_mktemp watchdog-fifo)"
+    rm -f "$fifo"
+    mkfifo -m 600 "$fifo" || return 1
+    heartbeat="$(vri_mktemp watchdog-heartbeat)"
+    timed_out="$(vri_mktemp watchdog-timeout)"
+    rm -f "$timed_out"
+    input="${VRI_COMMAND_STDIN:-/dev/null}"
+
+    if vri_have setsid; then
+        setsid "$@" <"$input" >"$fifo" 2>&1 &
+    else
+        "$@" <"$input" >"$fifo" 2>&1 &
+    fi
+    cmd_pid=$!
+    (
+        while kill -0 "$cmd_pid" 2>/dev/null; do
+            sleep "$interval"
+            kill -0 "$cmd_pid" 2>/dev/null || exit 0
+            now="$(date +%s)"
+            last="$(stat -c %Y "$heartbeat" 2>/dev/null || printf '%s' "$now")"
+            if ((now - last >= timeout)); then
+                : >"$timed_out"
+                printf '[x] command produced no output for %s seconds; stopping it\n' "$timeout" >&2
+                if vri_have setsid; then kill -TERM -- "-$cmd_pid" 2>/dev/null || true; else kill -TERM "$cmd_pid" 2>/dev/null || true; fi
+                sleep 2
+                if vri_have setsid; then kill -KILL -- "-$cmd_pid" 2>/dev/null || true; else kill -KILL "$cmd_pid" 2>/dev/null || true; fi
+                exit 0
+            fi
+        done
+    ) &
+    watch_pid=$!
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        touch "$heartbeat"
+        printf '%s\n' "$line"
+    done <"$fifo"
+    wait "$cmd_pid" || rc=$?
+    kill "$watch_pid" 2>/dev/null || true
+    wait "$watch_pid" 2>/dev/null || true
+    [[ -e "$timed_out" ]] && rc=124
+    rm -f "$fifo" "$heartbeat" "$timed_out"
+    return "$rc"
+}
+
+# Run apt/dpkg or an upstream installer with noninteractive settings inherited
+# by every child, stdin closed by default, and the inactivity watchdog active.
+vri_unattended_run() {
+    local apt_config
+    vri_tmp_init
+    apt_config="$(vri_unattended_apt_config)" || return 1
+    vri_watchdog_run env \
+        DEBIAN_FRONTEND=noninteractive \
+        DEBCONF_NONINTERACTIVE_SEEN=true \
+        DEBIAN_PRIORITY=critical \
+        NEEDRESTART_MODE=a \
+        APT_LISTCHANGES_FRONTEND=none \
+        UCF_FORCE_CONFFOLD=1 \
+        APT_CONFIG="$apt_config" \
+        "$@"
+}
+
 # Atomically write stdin to a file with the given mode (default 600).
 vri_write_atomic() {
     local dest="$1" mode="${2:-600}" tmp

@@ -116,6 +116,18 @@ setup() {
     [ "$status" -ne 0 ] || { echo "$output"; return 1; }
 }
 
+@test "unattended install protection remains wired into package and upstream paths" {
+    grep -q 'vri_run_unattended_logged apt-get update' lib/os.sh
+    grep -q 'vri_run_unattended_logged apt-get install' lib/os.sh
+    grep -q 'vri_unattended_run' lib/upstream.sh
+    grep -Eq 'vri_unattended_run.*\|.*_upstream_filter.*\|.*tee' lib/upstream.sh
+    grep -q 'NEEDRESTART_MODE=a' lib/common.sh install.sh
+    grep -q 'APT_CONFIG=' lib/common.sh install.sh
+    grep -q '</dev/null' install.sh
+    ! grep -RInE 'apt(-get)?[[:space:]]+(full-upgrade|upgrade)|awk[[:space:]]+-W[[:space:]]*interactive' install.sh bin lib
+    ! grep -RInE '^[[:space:]]*(sudo[[:space:]]+)?(shutdown|reboot|systemctl[[:space:]]+reboot)([[:space:]]|$)' install.sh bin lib
+}
+
 @test "no destructive firewall commands" {
     run grep -nE 'ufw[[:space:]]+(disable|reset|reload|default)|iptables[[:space:]]+-F|iptables[[:space:]]+--flush|nft[[:space:]]+flush|firewall-cmd[[:space:]]+--reload' "${LIBS[@]}"
     [ "$status" -ne 0 ] || { echo "$output"; return 1; }

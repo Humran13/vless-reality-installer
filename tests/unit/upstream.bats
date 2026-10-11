@@ -81,7 +81,8 @@ teardown() { stop_mock; }
 
 @test "upstream_install failure: filtered output, no credential leak, non-zero" {
     prepare_uninstalled_panel
-    FAKE_INSTALL_FAIL=1 run upstream_install v3.8.5
+    export FAKE_INSTALL_FAIL=1
+    run upstream_install v3.8.5
     [ "$status" -ne 0 ]
     [[ "$output" != *"hunter2-secret-pass"* ]]
     [[ "$output" != *"leaked-token-value"* ]]

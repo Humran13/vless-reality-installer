@@ -77,6 +77,44 @@ fi
 ((EUID == 0)) || fail "please run as root:  curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sudo bash"
 [[ "$(uname -s)" == "Linux" ]] || fail "Linux only"
 
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/vri-bootstrap.XXXXXXXX")"
+trap 'rm -rf -- "$tmp"' EXIT
+
+# The bootstrap cannot source lib/common.sh until curl/tar are available, so it
+# has a small standalone copy of the same inactivity-watchdog mechanism.
+bootstrap_watchdog_run() {
+    local timeout="${VRI_INACTIVITY_TIMEOUT:-300}" interval fifo heartbeat timed_out pid watcher rc=0 now last
+    [[ "$timeout" =~ ^[1-9][0-9]*$ ]] || timeout=300
+    interval=$((timeout / 5)); ((interval < 1)) && interval=1; ((interval > 10)) && interval=10
+    fifo="$tmp/bootstrap-fifo.$$" heartbeat="$tmp/bootstrap-heartbeat.$$" timed_out="$tmp/bootstrap-timeout.$$"
+    mkfifo -m 600 "$fifo" || return 1
+    : >"$heartbeat"
+    if command -v setsid >/dev/null 2>&1; then setsid "$@" </dev/null >"$fifo" 2>&1 & else "$@" </dev/null >"$fifo" 2>&1 & fi
+    pid=$!
+    (
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep "$interval"
+            kill -0 "$pid" 2>/dev/null || exit 0
+            now="$(date +%s)"; last="$(stat -c %Y "$heartbeat" 2>/dev/null || printf '%s' "$now")"
+            if ((now - last >= timeout)); then
+                : >"$timed_out"
+                printf '[x] bootstrap command produced no output for %s seconds; stopping it\n' "$timeout" >&2
+                if command -v setsid >/dev/null 2>&1; then kill -TERM -- "-$pid" 2>/dev/null || true; else kill -TERM "$pid" 2>/dev/null || true; fi
+                sleep 2
+                if command -v setsid >/dev/null 2>&1; then kill -KILL -- "-$pid" 2>/dev/null || true; else kill -KILL "$pid" 2>/dev/null || true; fi
+                exit 0
+            fi
+        done
+    ) &
+    watcher=$!
+    while IFS= read -r line || [[ -n "$line" ]]; do touch "$heartbeat"; printf '%s\n' "$line"; done <"$fifo"
+    wait "$pid" || rc=$?
+    kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true
+    [[ -e "$timed_out" ]] && rc=124
+    rm -f "$fifo" "$heartbeat" "$timed_out"
+    return "$rc"
+}
+
 need_pkgs=()
 command -v curl >/dev/null 2>&1 || need_pkgs+=(curl)
 command -v tar >/dev/null 2>&1 || need_pkgs+=(tar)
@@ -85,13 +123,19 @@ command -v sha256sum >/dev/null 2>&1 || need_pkgs+=(coreutils)
 if ((${#need_pkgs[@]})); then
     command -v apt-get >/dev/null 2>&1 || fail "missing tools (${need_pkgs[*]}) and apt-get is unavailable"
     info "Installing prerequisites: ${need_pkgs[*]}"
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -q >/dev/null 2>&1 || true
-    apt-get install -y -q --no-install-recommends "${need_pkgs[@]}" >/dev/null 2>&1 || fail "could not install ${need_pkgs[*]}"
+    apt_config="$tmp/apt-unattended.conf"
+    (umask 077 && printf '%s\n' \
+        'APT::Get::Assume-Yes "true";' \
+        'Dpkg::Options {' \
+        '  "--force-confdef";' \
+        '  "--force-confold";' \
+        '};' >"$apt_config") || fail "could not create temporary apt configuration"
+    chmod 600 "$apt_config"
+    unattended_env=(env DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true DEBIAN_PRIORITY=critical
+        NEEDRESTART_MODE=a APT_LISTCHANGES_FRONTEND=none UCF_FORCE_CONFFOLD=1 APT_CONFIG="$apt_config")
+    bootstrap_watchdog_run "${unattended_env[@]}" apt-get update -q || info "apt-get update reported problems; trying package installation"
+    bootstrap_watchdog_run "${unattended_env[@]}" apt-get install -y -q --no-install-recommends "${need_pkgs[@]}" || fail "could not install ${need_pkgs[*]}"
 fi
-
-tmp="$(mktemp -d "${TMPDIR:-/tmp}/vri-bootstrap.XXXXXXXX")"
-trap 'rm -rf -- "$tmp"' EXIT
 
 # ---- download ----
 info "Downloading $REPO@$REF ..."
