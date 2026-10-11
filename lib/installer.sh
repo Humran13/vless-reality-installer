@@ -248,7 +248,8 @@ installer_run() {
         log_info "Recovering mode: $(mode_call "$MODE" label)"
         mode_call "$MODE" validate || die "saved project state has invalid mode options; refusing unsafe automatic recovery" "$VRI_EX_STATE"
     elif [[ -z "${OPT_MODE:-}" ]]; then
-        if ((VRI_INTERACTIVE)); then modes_choose; else OPT_MODE="tcp"; fi
+        ((VRI_INTERACTIVE)) || die "no mode was specified and no interactive terminal is available; pass --mode tcp|grpc|xhttp" "$VRI_EX_USAGE"
+        modes_choose
     fi
     if ((!recover_existing)); then
         valid_mode "$OPT_MODE" || die "invalid --mode '$OPT_MODE' (valid: ${VRI_MODES[*]})" "$VRI_EX_USAGE"

@@ -15,6 +15,12 @@ setup() {
 teardown() { stop_mock; }
 
 inst() { run bash "$VR" install --non-interactive --server-address 203.0.113.7 "$@"; }
+interactive_inst() {
+    local answers="$1"
+    run env -u VRI_FORCE_NONINTERACTIVE bash -c \
+        'printf "%b" "$1" | script -qec "bash $2 install --server-address 203.0.113.7" /dev/null' \
+        _ "$answers" "$VR"
+}
 vr() { run bash "$VR" "$@"; }
 inbounds() { mock_state | jq -r '.inbounds | length'; }
 clients() { mock_state | jq -r '.clients | keys | length'; }
@@ -81,10 +87,40 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     [[ "$output" != *"flow="* ]]
 }
 
-@test "non-interactive default mode is tcp" {
-    inst
+@test "fresh interactive install shows every existing mode and selects tcp" {
+    interactive_inst $'1\n'
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Select VLESS REALITY connection mode"* ]]
+    [[ "$output" == *"TCP / Raw + REALITY"* ]]
+    [[ "$output" == *"gRPC + REALITY"* ]]
+    [[ "$output" == *"XHTTP + REALITY"* ]]
     [ "$(state .mode)" = "tcp" ]
+    [ "$(state '.clients[0].flow')" = "xtls-rprx-vision" ]
+}
+
+@test "fresh interactive install selects grpc through the existing selector" {
+    interactive_inst $'2\n\n'
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Select VLESS REALITY connection mode"* ]]
+    [ "$(state .mode)" = "grpc" ]
+    [ "$(state '.clients[0].flow')" = "" ]
+    [[ "$output" == *"type=grpc"* ]]
+}
+
+@test "fresh interactive install selects xhttp through the existing selector" {
+    interactive_inst $'3\n\n'
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"Select VLESS REALITY connection mode"* ]]
+    [ "$(state .mode)" = "xhttp" ]
+    [ "$(state '.clients[0].flow')" = "" ]
+    [[ "$output" == *"type=xhttp"* ]]
+}
+
+@test "fresh non-interactive install never silently chooses a mode" {
+    inst
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"pass --mode tcp|grpc|xhttp"* ]]
+    [ ! -e "$VRI_STATE_DIR/state.json" ]
 }
 
 @test "second run is idempotent: no new inbound/client/token/keys" {
@@ -97,6 +133,7 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     [ "$(state -c .reality)" = "$keys" ]
     [ "$(curl -s http://127.0.0.1:$MOCK_PORT/__state | jq '.next_token')" = "$toks" ]
     [[ "$output" == *"already exists"* ]]
+    [[ "$output" != *"Select VLESS REALITY connection mode"* ]]
 }
 
 @test "complete project state without x-ui service takes recovery path and preserves state and unrelated resources" {
@@ -109,6 +146,7 @@ state() { jq -r "$@" "$VRI_STATE_DIR/state.json"; }
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"continuing through the installation path to repair it"* ]]
     [[ "$output" != *"already exists on this server"* ]]
+    [[ "$output" != *"Select VLESS REALITY connection mode"* ]]
     [ "$(state '.clients[0].uuid')" = "$uuid" ]
     [ "$(state .reality.public_key)" = "$pub" ]
     [ "$(inbounds)" = "2" ]
